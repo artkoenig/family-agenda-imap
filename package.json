@@ -10,7 +10,8 @@
     "node": ">=26"
   },
   "scripts": {
-    "start": "node --import tsx src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node26 --format=esm --outfile=dist/main.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "start": "pnpm build && node dist/main.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test"
@@ -19,12 +20,12 @@
     "@family-agenda/plugin-contract": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-contract",
     "@family-agenda/plugin-kit": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-kit",
     "imapflow": "2.10.0",
-    "mailparser": "3.14.1",
-    "tsx": "4.23.15"
+    "mailparser": "3.14.1"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",
     "@types/node": "^26.0.0",
+    "esbuild": "0.28.2",
     "typescript": "~6.0.3",
     "vitest": "^5.0.5"
   }
