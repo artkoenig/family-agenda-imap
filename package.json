@@ -1,0 +1,31 @@
+{
+  "name": "family-agenda-imap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The IMAP mailbox Source Type of Family Agenda as a stateless plugin container.",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@12.17.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "start": "node --import tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "@family-agenda/plugin-contract": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-contract",
+    "@family-agenda/plugin-kit": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-kit",
+    "imapflow": "2.10.0",
+    "mailparser": "3.14.1",
+    "tsx": "4.23.15"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^26.0.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  }
+}
