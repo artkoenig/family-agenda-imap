@@ -179,11 +179,8 @@ importers:
         specifier: 3.14.1
         version: 3.14.1
       tsx:
-        specifier: ^4.23.15
+        specifier: 4.23.15
         version: 4.23.15
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
     devDependencies:
       '@types/mailparser':
         specifier: ^3.4.6

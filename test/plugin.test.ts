@@ -1,4 +1,6 @@
-import { createServer, connect, type Server } from "node:net";
+import { readFileSync } from "node:fs";
+import { createServer, connect, type Server, type Socket } from "node:net";
+import { TLSSocket } from "node:tls";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPluginHandler } from "@family-agenda/plugin-kit/server";
 import { pluginClient } from "@family-agenda/plugin-kit/testing";
@@ -280,7 +282,8 @@ Bitte Turnbeutel mitbringen.
   it("fails temporarily when the server cannot be reached", async () => {
     const error = await poll({ config: config({ port: "1" }) }).catch((thrown: unknown) => thrown);
 
-    expect(error).toMatchObject({ kind: "temporary" });
+    // Only the error's class and code reach the core, never a message that may hold a server's reply.
+    expect(error).toEqual({ kind: "temporary", message: "The mail server could not be read (Error ECONNREFUSED)." });
   });
 });
 
@@ -428,7 +431,9 @@ describe("the IMAP plugin's connection", () => {
 /** An HTTP CONNECT proxy, as the egress proxy is, that notes where each tunnel goes. */
 async function connectProxy() {
   const tunnels: string[] = [];
+  const sockets = new Set<Socket>();
   const proxy: Server = createServer((client) => {
+    sockets.add(client);
     client.once("data", (head) => {
       const target = /^CONNECT (\S+) HTTP/.exec(head.toString())?.[1] ?? "";
       tunnels.push(target);
@@ -443,7 +448,11 @@ async function connectProxy() {
   });
   await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
   const { port } = proxy.address() as { port: number };
-  return { url: `http://127.0.0.1:${port}`, tunnels, close: () => new Promise<void>((resolve) => proxy.close(() => resolve())) };
+  return { url: `http://127.0.0.1:${port}`, tunnels, close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>((resolve) => proxy.close(() => resolve()));
+    },
+  };
 }
 
 describe("the IMAP plugin behind the egress proxy", () => {
@@ -458,4 +467,64 @@ describe("the IMAP plugin behind the egress proxy", () => {
       await proxy.close();
     }
   });
+
+  it("still verifies the mail server's certificate through the tunnel, refusing one it cannot trust", async () => {
+    const proxy = await connectProxy();
+    const untrusted = await startTlsServer();
+    try {
+      const plain = { host: "127.0.0.1", port: String(untrusted.port), username: account.user, folders: ["INBOX"] };
+      const error = await pollWith(plugin({ proxy: proxy.url, allowPlaintext: false }), { plain, secrets: { password: account.password } }).catch((thrown: unknown) => thrown);
+
+      expect(untrusted.upgraded()).toBe(true);
+      expect(error).toMatchObject({ kind: "temporary", message: expect.stringContaining("SELF_SIGNED") });
+      expect(proxy.tunnels).toEqual([`127.0.0.1:${untrusted.port}`]);
+      expect(untrusted.commands).not.toContainEqual(expect.stringMatching(/^LOGIN/));
+    } finally {
+      await untrusted.close();
+      await proxy.close();
+    }
+  });
 });
+
+/**
+ * An IMAP server that offers STARTTLS with a self-signed certificate for 127.0.0.1, which no client
+ * may trust, and notes each command it reads after the upgrade.
+ */
+async function startTlsServer() {
+  const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
+  const commands: string[] = [];
+  const sockets = new Set<Socket>();
+  let upgraded = false;
+  const imap: Server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.write("* OK [CAPABILITY IMAP4rev1 STARTTLS LOGINDISABLED] ready\r\n");
+    const onData = (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\r\n").filter(Boolean)) {
+        const [tag, command = ""] = line.split(" ");
+        if (/^STARTTLS$/i.test(command)) {
+          socket.off("data", onData);
+          socket.write(`${tag} OK Begin TLS negotiation now\r\n`);
+          upgraded = true;
+          const secure = new TLSSocket(socket, { isServer: true, key: fixture("self-signed.key"), cert: fixture("self-signed.crt") });
+          secure.on("error", () => socket.destroy());
+          secure.on("data", (data: Buffer) => commands.push(...data.toString().split("\r\n").filter(Boolean).map((next) => next.split(" ").slice(1).join(" "))));
+          return;
+        }
+        if (/^CAPABILITY$/i.test(command)) socket.write(`* CAPABILITY IMAP4rev1 STARTTLS LOGINDISABLED\r\n${tag} OK done\r\n`);
+        else socket.write(`${tag} BAD not before TLS\r\n`);
+      }
+    };
+    socket.on("data", onData);
+  });
+  await new Promise<void>((resolve) => imap.listen(0, "127.0.0.1", resolve));
+  return {
+    port: (imap.address() as { port: number }).port,
+    commands,
+    upgraded: () => upgraded,
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>((resolve) => imap.close(() => resolve()));
+    },
+  };
+}
