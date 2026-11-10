@@ -194,6 +194,7 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
       silentApplies: false,
     },
     poll: (context) => withMailbox(context.config, (client) => pollMailbox(client, context)),
+    sourceAttributes: (context) => withMailbox(context.config, (client) => nameFolders(client, context)),
     async fieldChoices({ field, context }) {
       if (field !== "folders") throw new PluginError("definite", `The field "${field}" offers no choices.`);
       return { choices: await listChoices(context.config) };
@@ -259,8 +260,7 @@ async function pollMailbox(client: ImapFlow, context: RunContext): Promise<Inges
 
   const declared = gmail ? allowed.map((name) => ({ externalId: name, name })) : reads.map((read) => ({ externalId: read.key, name: read.path }));
   const current = new Set(declared.map((attribute) => attribute.externalId));
-  // A Source from before folders were Source Attributes declared one for the whole mailbox.
-  const archived = (options.previous ? options.previous.declared : [legacyAttribute]).filter((id) => !current.has(id));
+  const archived = archivedOf(options.previous, current);
 
   const before = membership(reads.flatMap((read) => read.before), current);
   const after = membership(reads.flatMap((read) => read.state.entries), current);
@@ -272,6 +272,26 @@ async function pollMailbox(client: ImapFlow, context: RunContext): Promise<Inges
     attributes: { declared, archived },
     syncCursor: JSON.stringify(cursor),
   };
+}
+
+/**
+ * The allow-listed folders, or on Gmail labels, as Source Attributes, named as a run names them but
+ * without reading a mail: each folder is only opened for its MAILBOXID.
+ */
+async function nameFolders(client: ImapFlow, context: RunContext): Promise<{ declared: { externalId: string; name: string }[]; archived: string[] }> {
+  const allowed = foldersOf(context.config.plain);
+  const gmail = isGmail(client);
+  const declared: { externalId: string; name: string }[] = [];
+  for (const path of allowed) {
+    const externalId = gmail ? path : containerKey(client, path, false, (await openFolder(client, path)).mailboxId);
+    declared.push({ externalId, name: path });
+  }
+  return { declared, archived: archivedOf(parseCursor(context.syncCursor), new Set(declared.map((attribute) => attribute.externalId))) };
+}
+
+/** Those the last run declared that are not `current` any more; a Source from before folders were Source Attributes declared one for the whole mailbox. */
+function archivedOf(previous: Cursor | null, current: Set<string>): string[] {
+  return (previous ? previous.declared : [legacyAttribute]).filter((id) => !current.has(id));
 }
 
 /** The mails whose Source Attributes are new or changed, each naming the ones it has now. */

@@ -17,8 +17,8 @@
     "check": "pnpm typecheck && pnpm test"
   },
   "dependencies": {
-    "@family-agenda/plugin-contract": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-contract",
-    "@family-agenda/plugin-kit": "github:artkoenig/family-agenda#715ae30ce03fe4bfbfb49d9bb6e539bba454de94&path:/packages/plugin-kit",
+    "@family-agenda/plugin-contract": "github:artkoenig/family-agenda#51056ae8303d2c6a9922afbd29bab6cc1258d9f5&path:/packages/plugin-contract",
+    "@family-agenda/plugin-kit": "github:artkoenig/family-agenda#51056ae8303d2c6a9922afbd29bab6cc1258d9f5&path:/packages/plugin-kit",
     "imapflow": "2.10.0",
     "mailparser": "3.14.1"
   },

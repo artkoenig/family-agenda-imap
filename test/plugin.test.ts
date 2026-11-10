@@ -106,6 +106,13 @@ const folderChoices = async (forConfig: RunContext["config"]) => {
   return (body as { choices: { value: string; label: string }[] }).choices;
 };
 
+/** The Source Attributes the plugin names apart from a run, for a Source of this configuration. */
+const attributesWith = async (of: Plugin, forConfig: RunContext["config"], syncCursor: string | null = null) => {
+  const { status, body } = await of("sourceAttributes", { config: forConfig, syncCursor, now: now.toISOString(), timeZone: "Europe/Berlin" });
+  if (status !== 200) throw body;
+  return body as NonNullable<IngestResult["attributes"]>;
+};
+
 /** The plain configuration of the next version, as the core migrates one. */
 const migrate = async (fromVersion: number, plain: Record<string, unknown>) => {
   const { status, body } = await plugin()("configMigration", { fromVersion, plain });
@@ -305,6 +312,32 @@ describe("the IMAP plugin's folders as Source Attributes", () => {
     }
   });
 
+  it("names the allow-listed folders apart from a run as a run declares them, by MAILBOXID where the server has OBJECTID", async () => {
+    server.deliver("Benannt", mail("b1"), received);
+    server.folders.get("Benannt")!.mailboxId = "F7";
+    server.capabilities = ["OBJECTID"];
+    try {
+      const named = await attributesWith(plugin(), config({ folders: ["Benannt", "INBOX"] }));
+      const { attributes } = await poll({ config: config({ folders: ["Benannt", "INBOX"] }) });
+      expect(named.declared).toEqual([
+        { externalId: "F7", name: "Benannt" },
+        { externalId: "INBOX", name: "INBOX" },
+      ]);
+      expect(named.declared).toEqual(attributes?.declared);
+    } finally {
+      server.capabilities = [];
+    }
+  });
+
+  it("archives apart from a run the folders the last run declared that left the allow-list", async () => {
+    const first = await poll({ config: config({ folders: ["Schule", "INBOX"] }) });
+    expect(await attributesWith(plugin(), config({ folders: ["Schule"] }), first.syncCursor)).toEqual({ declared: [{ externalId: "Schule", name: "Schule" }], archived: ["INBOX"] });
+  });
+
+  it("fails definitely naming a folder that does not exist", async () => {
+    await expect(attributesWith(plugin(), config({ folders: ["Fehlt"] }))).rejects.toMatchObject({ kind: "definite" });
+  });
+
   it("names a folder by its name where the server has no OBJECTID", async () => {
     server.deliver("Namen", mail("n1"), received);
     server.folders.get("Namen")!.mailboxId = "ignored";
@@ -364,6 +397,13 @@ describe("the IMAP plugin on Gmail", () => {
 
     expect(sourceRecords.map((record) => [record.externalId, record.attributes])).toEqual([["<schule@g.example>", ["Schule"]]]);
     expect(declared.active().sort()).toEqual(["Fehlt", "Schule"]);
+  });
+
+  it("names the allow-listed labels apart from a run", async () => {
+    expect((await attributesWith(plugin(), gconfig(["Schule", "Fehlt"]))).declared).toEqual([
+      { externalId: "Schule", name: "Schule" },
+      { externalId: "Fehlt", name: "Fehlt" },
+    ]);
   });
 
   it("calls the Inbox label INBOX and ignores the mails without an allow-listed label", async () => {
