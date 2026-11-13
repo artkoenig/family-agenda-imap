@@ -69,6 +69,9 @@ const config = (plain: Record<string, unknown> = {}, password = account.password
   secrets: { password },
 });
 
+/** The egress proxy the core hands a call, tunnelling to the fixture server. */
+const egress = await connectProxy();
+
 const plugin = (options: ImapPluginOptions = {}) => pluginClient(createPluginHandler(createImapPlugin({ allowPlaintext: true, ...options })));
 type Plugin = ReturnType<typeof plugin>;
 
@@ -89,7 +92,7 @@ type PollContext = Partial<Omit<RunContext, "now">> & { now?: Date; attributes?:
 /** Polls as the core does, over the kit's validating handler; an error answer rejects with its body. */
 const pollWith = async (of: Plugin, defaults: RunContext["config"], context: PollContext = {}): Promise<IngestResult> => {
   const { attributes, now: at = now, ...rest } = context;
-  const { status, body } = await of("poll", { config: defaults, syncCursor: null, timeZone: "Europe/Berlin", ...rest, now: at.toISOString() });
+  const { status, body } = await of("poll", { config: defaults, syncCursor: null, timeZone: "Europe/Berlin", egressProxy: egress.url, ...rest, now: at.toISOString() });
   if (status !== 200) throw body;
   const result = body as IngestResult;
   attributes?.apply(result.attributes);
@@ -100,7 +103,7 @@ const poll = (context: PollContext = {}, of: Plugin = plugin()): Promise<IngestR
 
 /** The values the folders field offers for a Source of this configuration. */
 const folderChoices = async (forConfig: RunContext["config"]) => {
-  const context = { config: forConfig, syncCursor: null, now: now.toISOString(), timeZone: "Europe/Berlin" };
+  const context = { config: forConfig, syncCursor: null, now: now.toISOString(), timeZone: "Europe/Berlin", egressProxy: egress.url };
   const { status, body } = await plugin()("fieldChoices", { field: "folders", context });
   if (status !== 200) throw body;
   return (body as { choices: { value: string; label: string }[] }).choices;
@@ -108,7 +111,7 @@ const folderChoices = async (forConfig: RunContext["config"]) => {
 
 /** The Source Attributes the plugin names apart from a run, for a Source of this configuration. */
 const attributesWith = async (of: Plugin, forConfig: RunContext["config"], syncCursor: string | null = null) => {
-  const { status, body } = await of("sourceAttributes", { config: forConfig, syncCursor, now: now.toISOString(), timeZone: "Europe/Berlin" });
+  const { status, body } = await of("sourceAttributes", { config: forConfig, syncCursor, now: now.toISOString(), timeZone: "Europe/Berlin", egressProxy: egress.url });
   if (status !== 200) throw body;
   return body as NonNullable<IngestResult["attributes"]>;
 };
@@ -125,9 +128,10 @@ const message = (record: SourceRecord | undefined) => {
   return record.content;
 };
 
-describePluginContract(() => createPluginHandler(createImapPlugin({ allowPlaintext: true })), { config: config(), now, languages: ["de"] });
+describePluginContract(() => createPluginHandler(createImapPlugin({ allowPlaintext: true })), { config: config(), now, languages: ["de"], egressProxy: egress.url });
 
 afterAll(async () => {
+  await egress.close();
   await server.stop();
 });
 
@@ -289,8 +293,9 @@ Bitte Turnbeutel mitbringen.
   it("fails temporarily when the server cannot be reached", async () => {
     const error = await poll({ config: config({ port: "1" }) }).catch((thrown: unknown) => thrown);
 
-    // Only the error's class and code reach the core, never a message that may hold a server's reply.
-    expect(error).toEqual({ kind: "temporary", message: "The mail server could not be read (Error ECONNREFUSED)." });
+    // Only the error's class and code reach the core, never a message that may hold a server's reply
+    // or the egress proxy's address, which refuses the tunnel here.
+    expect(error).toEqual({ kind: "temporary", message: "The mail server could not be read (Error EPROXY)." });
   });
 });
 
@@ -449,7 +454,7 @@ describe("the IMAP plugin's choice of folders", () => {
   });
 
   it("offers no choices for another field", async () => {
-    const context = { config: config(), syncCursor: null, now: now.toISOString(), timeZone: "Europe/Berlin" };
+    const context = { config: config(), syncCursor: null, now: now.toISOString(), timeZone: "Europe/Berlin", egressProxy: egress.url };
     const { status, body } = await plugin()("fieldChoices", { field: "host", context });
 
     expect(status).toBe(422);
@@ -471,12 +476,14 @@ describe("the IMAP plugin's connection", () => {
 /** An HTTP CONNECT proxy, as the egress proxy is, that notes where each tunnel goes. */
 async function connectProxy() {
   const tunnels: string[] = [];
+  const credentials: string[] = [];
   const sockets = new Set<Socket>();
   const proxy: Server = createServer((client) => {
     sockets.add(client);
     client.once("data", (head) => {
       const target = /^CONNECT (\S+) HTTP/.exec(head.toString())?.[1] ?? "";
       tunnels.push(target);
+      credentials.push(/\r\nproxy-authorization: ([^\r\n]+)/i.exec(head.toString())?.[1] ?? "");
       const [host = "", port = ""] = target.split(":");
       const upstream = connect(Number(port), host, () => {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -488,7 +495,7 @@ async function connectProxy() {
   });
   await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
   const { port } = proxy.address() as { port: number };
-  return { url: `http://127.0.0.1:${port}`, tunnels, close: () => {
+  return { url: `http://127.0.0.1:${port}`, tunnels, credentials, close: () => {
       for (const socket of sockets) socket.destroy();
       return new Promise<void>((resolve) => proxy.close(() => resolve()));
     },
@@ -496,13 +503,24 @@ async function connectProxy() {
 }
 
 describe("the IMAP plugin behind the egress proxy", () => {
-  it("tunnels its connection to the mail server through the proxy it is given", async () => {
+  it("tunnels its connection to the mail server through the egress proxy of the call", async () => {
     const proxy = await connectProxy();
     try {
-      const { sourceRecords } = await poll({}, plugin({ proxy: proxy.url }));
+      const { sourceRecords } = await poll({ egressProxy: proxy.url });
 
       expect(sourceRecords.map((record) => record.externalId)).toContain("<elternabend-1@schule.example.org>");
       expect(proxy.tunnels).toEqual([`127.0.0.1:${server.port}`]);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("presents the ticket of the call to the proxy, which allows this one Source's server", async () => {
+    const proxy = await connectProxy();
+    try {
+      await poll({ egressProxy: proxy.url.replace("http://", "http://ticket:a-ticket@") });
+
+      expect(proxy.credentials).toEqual([`Basic ${Buffer.from("ticket:a-ticket").toString("base64")}`]);
     } finally {
       await proxy.close();
     }
@@ -513,7 +531,7 @@ describe("the IMAP plugin behind the egress proxy", () => {
     const untrusted = await startTlsServer();
     try {
       const plain = { host: "127.0.0.1", port: String(untrusted.port), username: account.user, folders: ["INBOX"] };
-      const error = await pollWith(plugin({ proxy: proxy.url, allowPlaintext: false }), { plain, secrets: { password: account.password } }).catch((thrown: unknown) => thrown);
+      const error = await pollWith(plugin({ allowPlaintext: false }), { plain, secrets: { password: account.password } }, { egressProxy: proxy.url }).catch((thrown: unknown) => thrown);
 
       expect(untrusted.upgraded()).toBe(true);
       expect(error).toMatchObject({ kind: "temporary", message: expect.stringContaining("SELF_SIGNED") });
