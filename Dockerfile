@@ -22,6 +22,6 @@ COPY --from=build /app/dist ./dist
 
 USER node
 ENV PORT=8080
-# Every IMAP connection is tunnelled through the egress proxy that compose.plugins.yaml sets in HTTPS_PROXY.
+# Every IMAP connection is tunnelled through the egress proxy the call carries (contract 3.0).
 EXPOSE 8080
 CMD ["node", "dist/main.mjs"]

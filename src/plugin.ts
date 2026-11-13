@@ -14,11 +14,6 @@ export type ImapPluginOptions = {
   allowPlaintext?: boolean;
   /** How long connecting and each answer may take before the run fails. */
   timeoutMs?: number;
-  /**
-   * The HTTP CONNECT proxy every connection goes through, such as the egress proxy in
-   * `HTTPS_PROXY`; none by default.
-   */
-  proxy?: string;
 };
 
 /** The plugin's own version: that of package.json, raised with each release. */
@@ -66,7 +61,7 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
   const timeoutMs = options.timeoutMs ?? 60_000;
 
   /** Creates an IMAP client from the Source's config, validating the address. */
-  function mailboxClient(config: Config): ImapFlow {
+  function mailboxClient(config: Config, egressProxy: string): ImapFlow {
     const host = stringOf(config.plain.host).trim();
     const port = portOf(config.plain.port);
     if (host === "" || !isPort(port)) {
@@ -78,7 +73,9 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
       secure: port === defaultPort,
       doSTARTTLS: port === defaultPort ? undefined : !options.allowPlaintext,
       auth: { user: stringOf(config.plain.username), pass: config.secrets.password ?? "" },
-      ...(options.proxy ? { proxy: options.proxy } : {}),
+      // The connection is tunnelled through the egress proxy of the call, whose ticket allows this
+      // one Source's mail server (contract 3.0); a connection beside it is refused.
+      proxy: egressProxy,
       logger: false,
       disableAutoIdle: true,
       connectionTimeout: timeoutMs,
@@ -88,8 +85,8 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
   }
 
   /** Runs `use` on a connection logged in with the Source's account. */
-  async function withMailbox<T>(config: Config, use: (client: ImapFlow) => Promise<T>): Promise<T> {
-    const client = mailboxClient(config);
+  async function withMailbox<T>(context: Pick<RunContext, "config" | "egressProxy">, use: (client: ImapFlow) => Promise<T>): Promise<T> {
+    const client = mailboxClient(context.config, context.egressProxy);
     // A connection that drops is reported by the command waiting on it.
     client.on("error", () => undefined);
     try {
@@ -109,8 +106,8 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
   }
 
   /** The folders, or on Gmail the labels, the mailbox offers to read. */
-  function listChoices(config: Config): Promise<Choice[]> {
-    return withMailbox(config, async (client) => {
+  function listChoices(context: Pick<RunContext, "config" | "egressProxy">): Promise<Choice[]> {
+    return withMailbox(context, async (client) => {
       const mailboxes = (await client.list()).filter((mailbox) => !mailbox.flags.has("\\Noselect"));
       if (!isGmail(client)) return mailboxes.map((mailbox) => ({ value: mailbox.path, label: mailbox.path }));
       const labels = mailboxes.flatMap((mailbox) => {
@@ -193,11 +190,11 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
       // School mail pauses for weeks in the holidays.
       silentApplies: false,
     },
-    poll: (context) => withMailbox(context.config, (client) => pollMailbox(client, context)),
-    sourceAttributes: (context) => withMailbox(context.config, (client) => nameFolders(client, context)),
+    poll: (context) => withMailbox(context, (client) => pollMailbox(client, context)),
+    sourceAttributes: (context) => withMailbox(context, (client) => nameFolders(client, context)),
     async fieldChoices({ field, context }) {
       if (field !== "folders") throw new PluginError("definite", `The field "${field}" offers no choices.`);
-      return { choices: await listChoices(context.config) };
+      return { choices: await listChoices(context) };
     },
     configMigration({ fromVersion, plain }) {
       const migrate = migrations[fromVersion];
