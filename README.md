@@ -15,7 +15,7 @@ In `plugins.yml` of an Instance. The mail server needs no egress entry: `host` i
 ```yaml
 plugins:
   - id: imap
-    image: ghcr.io/artkoenig/family-agenda-imap:0.2.0
+    image: ghcr.io/artkoenig/family-agenda-imap:0.3.0
 ```
 
 The image listens on port 8080 and tunnels every IMAP connection through the HTTP CONNECT proxy the call carries (`egressProxy`, contract 3.0), with its ticket, which allows that one Source's mail server. The environment sets no proxy: a connection beside the ticket is refused. TLS is still end to end: the mail server's certificate is verified through the tunnel.
