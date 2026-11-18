@@ -54,7 +54,7 @@ const migrations: Record<number, (plain: Plain) => Plain> = {
  * `OBJECTID` and by its name otherwise; on Gmail, which has labels instead, it reads All Mail once
  * and each allow-listed label is one. A mail names the allow-listed folders or labels it is in, and
  * is stated again when they change; one that is in none any more is withdrawn. Everything not
- * allow-listed is dropped here, without a record. With nothing allow-listed, it reads INBOX.
+ * allow-listed is dropped here, without a record. With nothing allow-listed, it reads nothing.
  * Stateless: each call carries the account and the sync cursor.
  */
 export function createImapPlugin(options: ImapPluginOptions = {}): PluginImplementation {
@@ -179,8 +179,8 @@ export function createImapPlugin(options: ImapPluginOptions = {}): PluginImpleme
             required: false,
             hasChoices: true,
             description: {
-              en: "Only the ticked folders (on Gmail: labels) are read; INBOX if none is ticked. Tick folders your mail filters fill with school mail, or a mailbox only school mail is forwarded to: every mail in them is sent to the LLM endpoint. The mail server offers them once the Source is set up.",
-              de: "Nur die angehakten Ordner (bei Gmail: Labels) werden gelesen; INBOX, wenn keiner angehakt ist. Hake Ordner an, die deine Mailfilter mit Schulmails füllen, oder ein Postfach, an das nur Schulmails weitergeleitet werden: Jede Mail darin geht an den LLM-Endpunkt. Der Mailserver bietet sie an, sobald die Quelle eingerichtet ist.",
+              en: "Only the ticked folders (on Gmail: labels) are read; none if none is ticked. Tick folders your mail filters fill with school mail, or a mailbox only school mail is forwarded to: every mail in them is sent to the LLM endpoint. The mail server offers them once the Source is set up.",
+              de: "Nur die angehakten Ordner (bei Gmail: Labels) werden gelesen; keiner, wenn keiner angehakt ist. Hake Ordner an, die deine Mailfilter mit Schulmails füllen, oder ein Postfach, an das nur Schulmails weitergeleitet werden: Jede Mail darin geht an den LLM-Endpunkt. Der Mailserver bietet sie an, sobald die Quelle eingerichtet ist.",
             },
           },
         ],
@@ -227,10 +227,10 @@ function commaSeparated(text: string): string[] {
   return uniqueNames(text.split(/[,\n]/));
 }
 
-/** The folders, or on Gmail the labels, an Admin allow-listed, in their order; INBOX if none. */
+/** The folders, or on Gmail the labels, an Admin allow-listed, in their order. */
 function foldersOf(plain: Record<string, unknown>): string[] {
   const configured = Array.isArray(plain.folders) ? uniqueNames(plain.folders) : commaSeparated(stringOf(plain.folders));
-  return configured.length > 0 ? configured : ["INBOX"];
+  return configured;
 }
 
 /** One container (a folder, or Gmail's All Mail) as this run read it. */
@@ -253,7 +253,8 @@ async function pollMailbox(client: ImapFlow, context: RunContext): Promise<Inges
   const gmail = isGmail(client);
   const options: ReadOptions = { gmail, labels: new Set(allowed), previous: parseCursor(context.syncCursor), now };
   const reads: ContainerRead[] = [];
-  for (const path of gmail ? [await allMailPath(client)] : allowed) reads.push(await readContainer(client, path, options));
+  const containers = gmail ? (allowed.length > 0 ? [await allMailPath(client)] : []) : allowed;
+  for (const path of containers) reads.push(await readContainer(client, path, options));
 
   const declared = gmail ? allowed.map((name) => ({ externalId: name, name })) : reads.map((read) => ({ externalId: read.key, name: read.path }));
   const current = new Set(declared.map((attribute) => attribute.externalId));
