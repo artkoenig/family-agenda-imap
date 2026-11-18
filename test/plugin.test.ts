@@ -184,11 +184,17 @@ Bitte Turnbeutel mitbringen.
     expect((await poll({ syncCursor })).sourceRecords).toEqual([]);
   });
 
-  it("reads INBOX as the Source itself when no folder is configured", async () => {
-    const { sourceRecords } = await poll({ config: config({ folders: undefined }) });
+  it("reads no folder, not even INBOX, when none is ticked", async () => {
+    const { sourceRecords, attributes } = await poll({ config: config({ folders: undefined }) });
 
-    expect(sourceRecords).toHaveLength(1);
-    expect(sourceRecords[0]?.attributes).toEqual(["INBOX"]);
+    expect(sourceRecords).toEqual([]);
+    expect(attributes?.declared).toEqual([]);
+  });
+
+  it("reads INBOX only once it is ticked", async () => {
+    const { sourceRecords } = await poll({ config: config({ folders: ["INBOX"] }) });
+
+    expect(sourceRecords.map((record) => record.attributes)).toEqual([["INBOX"]]);
     expect(message(sourceRecords[0]).text).toContain("Nicht für die Schule.");
   });
 
@@ -409,6 +415,13 @@ describe("the IMAP plugin on Gmail", () => {
       { externalId: "Schule", name: "Schule" },
       { externalId: "Fehlt", name: "Fehlt" },
     ]);
+  });
+
+  it("reads no label on Gmail when none is ticked", async () => {
+    const { sourceRecords, attributes } = await gpoll({ config: gconfig([]) });
+
+    expect(sourceRecords).toEqual([]);
+    expect(attributes?.declared).toEqual([]);
   });
 
   it("calls the Inbox label INBOX and ignores the mails without an allow-listed label", async () => {
