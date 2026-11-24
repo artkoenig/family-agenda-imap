@@ -4,7 +4,7 @@ import { PluginError, type PluginImplementation } from "@family-agenda/plugin-ki
 import packageJson from "../package.json" with { type: "json" };
 import { legacyAttribute, parseCursor, type ContainerState, type Cursor, type Entry } from "./cursor";
 import { allMailPath, allowedLabels, gmailLabelChoice, inboxFirst, isGmail } from "./gmail";
-import { receivedMs, recordOf } from "./mail";
+import { isSameAddress, receivedMs, recordOf } from "./mail";
 
 export type ImapPluginOptions = {
   /**
@@ -249,6 +249,7 @@ type ReadOptions = { gmail: boolean; labels: Set<string>; previous: Cursor | nul
 
 async function pollMailbox(client: ImapFlow, context: RunContext): Promise<IngestResult> {
   const now = new Date(context.now);
+  const account = stringOf(context.config.plain.username);
   const allowed = foldersOf(context.config.plain);
   const gmail = isGmail(client);
   const options: ReadOptions = { gmail, labels: new Set(allowed), previous: parseCursor(context.syncCursor), now };
@@ -265,7 +266,7 @@ async function pollMailbox(client: ImapFlow, context: RunContext): Promise<Inges
   const withdrawn = [...before.keys()].filter((id) => !after.has(id));
   const cursor: Cursor = { v: 2, declared: [...current].sort(), containers: Object.fromEntries(reads.map((read) => [read.key, read.state])) };
   return {
-    sourceRecords: await changedRecords(client, reads, before, after, now),
+    sourceRecords: (await changedRecords(client, reads, before, after, now)).map((record) => (isSameAddress(record.sender, account) ? { ...record, own: true } : record)),
     ...(withdrawn.length > 0 ? { withdrawn } : {}),
     attributes: { declared, archived },
     syncCursor: JSON.stringify(cursor),

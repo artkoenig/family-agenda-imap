@@ -51,6 +51,12 @@ function senderOf(parsed: ParsedMail): string | null {
   return from?.value[0]?.address?.toLowerCase() ?? null;
 }
 
+/** Whether a sender is the mailbox's own account, whose user name usually is its address; a Gmail address may end in either domain. */
+export function isSameAddress(sender: string | undefined, account: string): boolean {
+  const normal = (address: string) => address.trim().toLowerCase().replace(/@googlemail\.com$/, "@gmail.com");
+  return sender !== undefined && normal(sender) === normal(account);
+}
+
 /** The sender and subject a mail is shown with, those it has. */
 function shownWith(sender: string | null, subject: string | undefined): { sender?: string; subject?: string } {
   return { ...(sender ? { sender } : {}), ...(subject?.trim() ? { subject: subject.trim() } : {}) };
