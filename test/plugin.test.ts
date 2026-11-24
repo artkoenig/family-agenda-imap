@@ -172,6 +172,30 @@ Bitte Turnbeutel mitbringen.
     expect(sourceRecords.map((record) => record.occurredAt)).toEqual(["2026-09-14T06:30:00.000Z"]);
   });
 
+  describe("a mail's own flag", () => {
+    const mailFrom = async (from: string, username: string) => {
+      const own = new ImapServerFixture({ user: username, password: account.password });
+      await own.start();
+      own.deliver("Gesendet", `From: ${from}\nSubject: Sommerfest\nMessage-ID: <own@example.org>\n\nIch bringe Saft mit.\n`, new Date("2026-09-14T06:00:00Z"));
+      try {
+        const { sourceRecords } = await poll({ config: config({ port: String(own.port), username, folders: ["Gesendet"] }) });
+        return sourceRecords.map((record) => record.own);
+      } finally {
+        await own.stop();
+      }
+    };
+
+    it("is set on a mail sent from the account's address, however it is written", async () => {
+      expect(await mailFrom("Familie <Familie@Example.org>", "familie@example.org")).toEqual([true]);
+      expect(await mailFrom("familie@googlemail.com", "familie@gmail.com")).toEqual([true]);
+    });
+
+    it("is left out of any other mail, also where the user name is no address", async () => {
+      expect(await mailFrom("Familie <berger@schule.example.org>", "familie@example.org")).toEqual([undefined]);
+      expect(await mailFrom("familie@example.org", "familie")).toEqual([undefined]);
+    });
+  });
+
   it("reads later mails after the last UID it saw", async () => {
     const first = await poll();
     server.deliver("Schule", moved, new Date("2026-09-15T10:00:00Z"));
